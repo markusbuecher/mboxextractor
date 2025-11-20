@@ -70,6 +70,15 @@ def parse_args() -> argparse.Namespace:
         help="Scan the archive and print a summary of attachment MIME types and extensions.",
     )
     parser.add_argument(
+        "--name-template",
+        default="{date}_{sender}_{subject}_{attachment}",
+        help=(
+            "Template for the saved attachment filename (without directory). "
+            "Available placeholders: {date}, {sender}, {subject}, {attachment}. "
+            "Include {attachment} to preserve the original extension."
+        ),
+    )
+    parser.add_argument(
         "--progress",
         action="store_true",
         help="Show a simple progress bar while scanning the mbox archive.",
@@ -228,6 +237,7 @@ def build_output_path(
     date_str: str,
     subject: str,
     attachment_name: str,
+    name_template: str,
     year_subdirs: bool,
     sender_subdirs: bool,
     existing: set[Path],
@@ -237,7 +247,24 @@ def build_output_path(
     safe_sender = sanitize_text(sender, fallback="unknown")
     safe_subject = sanitize_text(subject, fallback="no_subject")
     safe_attachment = sanitize_text(attachment_name, fallback="attachment")
-    base_name = f"{date_str}_{safe_sender}_{safe_subject}_{safe_attachment}"
+    tokens = {
+        "date": date_str or "undated",
+        "sender": safe_sender,
+        "subject": safe_subject,
+        "attachment": safe_attachment,
+    }
+    try:
+        formatted = name_template.format(**tokens)
+    except KeyError as exc:
+        missing = str(exc.args[0]) if exc.args else "unknown"
+        raise ValueError(
+            f"Unknown placeholder in --name-template: {missing}. "
+            "Allowed: {date}, {sender}, {subject}, {attachment}"
+        ) from exc
+    except Exception as exc:
+        raise ValueError(f"Invalid --name-template: {exc}") from exc
+
+    base_name = sanitize_text(formatted, fallback="attachment")
 
     parts = [output_dir]
     if year_subdirs and date_str[:4].isdigit():
@@ -328,6 +355,7 @@ def process_mbox(
     exclude_types: set[str],
     year_subdirs: bool,
     sender_subdirs: bool,
+    name_template: str,
     dry_run: bool,
     verbose: bool,
     list_types: bool,
@@ -397,6 +425,7 @@ def process_mbox(
                     date_str=date_str,
                     subject=subject,
                     attachment_name=attachment_name,
+                    name_template=name_template,
                     year_subdirs=year_subdirs,
                     sender_subdirs=sender_subdirs,
                     existing=existing_paths,
@@ -448,6 +477,7 @@ def main() -> int:
             exclude_types=exclude_types,
             year_subdirs=args.year_subdirs,
             sender_subdirs=args.sender_subdirs,
+            name_template=args.name_template,
             dry_run=args.dry_run,
             verbose=args.verbose,
             list_types=args.list_types,

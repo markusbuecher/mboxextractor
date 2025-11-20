@@ -19,6 +19,7 @@ python extract_mbox_attachments.py \
   [--include-types application/pdf,image/] \
   [--exclude-types .png,.jpg] \
   [--list-types] \
+  [--name-template "{date}_{sender}_{subject}_{attachment}"] \
   [--progress] \
   [--max-size-mb 25] \
   [--year-subdirs] \
@@ -39,6 +40,10 @@ python extract_mbox_attachments.py \
   (same format as `--include-types`). Exclusions take precedence.
 * `--list-types`: Scan the archive and print a summary of attachment MIME types
   and file extensions without requiring a separate utility.
+* `--name-template`: Template for output filenames. Placeholders: `{date}`
+  (YYYYMMDD or `undated`), `{sender}`, `{subject}`, `{attachment}` (include
+  this placeholder to keep the original extension). The template is sanitized
+  for filesystem safety.
 * `--progress`: Show a simple progress bar while scanning the mbox archive.
 * `--max-size-mb`: Skip any attachment larger than the specified size (MB).
 * `--year-subdirs`: Organize output into `YYYY/` subdirectories based on the
@@ -49,8 +54,9 @@ python extract_mbox_attachments.py \
 
 ### Notes
 
-* Attachments are named using email date, sender, subject, and original
-  filename, with filesystem-safe characters.
+* By default, attachments are named using email date, sender, subject, and
+  original filename with filesystem-safe characters. Customize with
+  `--name-template` if you want a different naming pattern.
 * Each attachment has a `.metadata.txt` sidecar file containing email headers,
   attachment details, and any available plain-text body to enhance Paperless-ngx
   indexing.
