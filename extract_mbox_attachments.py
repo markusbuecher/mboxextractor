@@ -244,7 +244,11 @@ def process_mbox(
     existing_paths: set[Path] = set()
     total_extracted = 0
 
-    with mailbox.mbox(mbox_path, factory=lambda f: email.message_from_binary_file(f, policy=policy.default)) as mbox:
+    mbox = mailbox.mbox(
+        mbox_path,
+        factory=lambda f: email.message_from_binary_file(f, policy=policy.default),
+    )
+    try:
         for index, message in enumerate(mbox, start=1):
             body_text = extract_body_text(message)
             sender = decode_header_value(message.get("From")) or "unknown"
@@ -288,6 +292,8 @@ def process_mbox(
                 if verbose:
                     action = "Would write" if dry_run else "Wrote"
                     print(f"{action} attachment to {output_path}")
+    finally:
+        mbox.close()
     return total_extracted
 
 
