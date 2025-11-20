@@ -16,6 +16,10 @@ filenames and text content.
 python extract_mbox_attachments.py \
   --mbox /path/to/archive.mbox \
   --output-dir /path/to/output \
+  [--include-types application/pdf,image/] \
+  [--exclude-types .png,.jpg] \
+  [--list-types] \
+  [--progress] \
   [--max-size-mb 25] \
   [--year-subdirs] \
   [--sender-subdirs] \
@@ -28,6 +32,14 @@ python extract_mbox_attachments.py \
 * `--mbox` (required): Path to the `.mbox` file to process.
 * `--output-dir` (required): Directory where attachments and metadata files are
   written.
+* `--include-types`: Only save attachments whose MIME type or file extension
+  matches (e.g., `application/pdf`, `image/`, `.csv`). Accepts multiple
+  arguments or comma-separated lists.
+* `--exclude-types`: Skip attachments whose MIME type or file extension matches
+  (same format as `--include-types`). Exclusions take precedence.
+* `--list-types`: Scan the archive and print a summary of attachment MIME types
+  and file extensions without requiring a separate utility.
+* `--progress`: Show a simple progress bar while scanning the mbox archive.
 * `--max-size-mb`: Skip any attachment larger than the specified size (MB).
 * `--year-subdirs`: Organize output into `YYYY/` subdirectories based on the
   email date.

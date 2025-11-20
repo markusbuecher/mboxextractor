@@ -16,6 +16,7 @@ import mailbox
 import os
 from pathlib import Path
 import re
+from collections import Counter
 from typing import Iterable, Optional
 
 
@@ -44,6 +45,36 @@ def parse_args() -> argparse.Namespace:
         help="Skip attachments larger than this size (in megabytes).",
     )
     parser.add_argument(
+        "--include-types",
+        action="append",
+        default=None,
+        help=(
+            "Only save attachments whose MIME type or file extension matches. "
+            "Provide values like 'application/pdf', 'image/', or '.csv'. "
+            "Can be specified multiple times or as a comma-separated list."
+        ),
+    )
+    parser.add_argument(
+        "--exclude-types",
+        action="append",
+        default=None,
+        help=(
+            "Skip attachments whose MIME type or file extension matches. "
+            "Provide values like 'image/', 'text/html', or '.ics'. "
+            "Takes precedence over --include-types."
+        ),
+    )
+    parser.add_argument(
+        "--list-types",
+        action="store_true",
+        help="Scan the archive and print a summary of attachment MIME types and extensions.",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Show a simple progress bar while scanning the mbox archive.",
+    )
+    parser.add_argument(
         "--year-subdirs",
         action="store_true",
         help="Place attachments into year-based subdirectories (YYYY).",
@@ -64,6 +95,36 @@ def parse_args() -> argparse.Namespace:
         help="Print progress information while processing messages.",
     )
     return parser.parse_args()
+
+
+def _split_type_values(values: Optional[list[str]]) -> set[str]:
+    """Normalize comma-separated type selectors into a set."""
+
+    if not values:
+        return set()
+    tokens: list[str] = []
+    for value in values:
+        tokens.extend(part.strip() for part in value.split(","))
+    return {token.lower() for token in tokens if token}
+
+
+def normalize_selector(selector: str) -> tuple[str, str]:
+    """Return (kind, value) where kind is 'mime' or 'ext'."""
+
+    selector = selector.lower()
+    if selector.startswith("."):
+        return ("ext", selector.lstrip("."))
+    return ("mime", selector)
+
+
+def attachment_matches(selector: str, content_type: str, filename: str) -> bool:
+    """Check whether an attachment matches a selector token."""
+
+    kind, value = normalize_selector(selector)
+    if kind == "mime":
+        return content_type.startswith(value)
+    suffix = Path(filename).suffix.lower().lstrip(".")
+    return bool(suffix) and suffix == value
 
 
 def sanitize_text(text: str, fallback: str = "untitled") -> str:
@@ -140,6 +201,25 @@ def iter_attachments(message: Message) -> Iterable[tuple[Message, bytes]]:
         if data is None:
             continue
         yield part, data
+
+
+def should_save_attachment(
+    content_type: str,
+    filename: str,
+    include_types: set[str],
+    exclude_types: set[str],
+) -> bool:
+    """Return True when the attachment passes include/exclude filters."""
+
+    for selector in exclude_types:
+        if attachment_matches(selector, content_type, filename):
+            return False
+    if not include_types:
+        return True
+    return any(
+        attachment_matches(selector, content_type, filename)
+        for selector in include_types
+    )
 
 
 def build_output_path(
@@ -227,14 +307,31 @@ def format_metadata(
     return "\n".join(lines)
 
 
+def display_progress(current: int, total: Optional[int]) -> None:
+    """Render a lightweight progress bar for the current position."""
+
+    if total and total > 0:
+        percent = min(100, int((current / total) * 100))
+        bar_length = 30
+        filled = int(bar_length * percent / 100)
+        bar = "#" * filled + "-" * (bar_length - filled)
+        print(f"[{bar}] {percent:3d}% ({current}/{total})", end="\r", flush=True)
+    else:
+        print(f"Processed {current} message(s)...", end="\r", flush=True)
+
+
 def process_mbox(
     mbox_path: Path,
     output_dir: Path,
     max_size_mb: Optional[float],
+    include_types: set[str],
+    exclude_types: set[str],
     year_subdirs: bool,
     sender_subdirs: bool,
     dry_run: bool,
     verbose: bool,
+    list_types: bool,
+    show_progress: bool,
 ) -> int:
     """Process the mbox file and return the count of extracted attachments."""
 
@@ -243,13 +340,21 @@ def process_mbox(
 
     existing_paths: set[Path] = set()
     total_extracted = 0
+    mime_counter: Counter[str] = Counter()
+    extension_counter: Counter[str] = Counter()
 
     mbox = mailbox.mbox(
         mbox_path,
         factory=lambda f: email.message_from_binary_file(f, policy=policy.default),
     )
     try:
+        total_messages = len(mbox)
+    except Exception:
+        total_messages = None
+    try:
         for index, message in enumerate(mbox, start=1):
+            if show_progress:
+                display_progress(index, total_messages)
             body_text = extract_body_text(message)
             sender = decode_header_value(message.get("From")) or "unknown"
             subject = decode_header_value(message.get("Subject")) or ""
@@ -258,6 +363,25 @@ def process_mbox(
 
             for part, data in iter_attachments(message):
                 attachment_name = decode_header_value(part.get_filename()) or "attachment"
+                content_type = part.get_content_type().lower()
+                mime_counter[content_type] += 1
+                suffix = Path(attachment_name).suffix.lower().lstrip(".")
+                if suffix:
+                    extension_counter[suffix] += 1
+
+                if not should_save_attachment(
+                    content_type=content_type,
+                    filename=attachment_name,
+                    include_types=include_types,
+                    exclude_types=exclude_types,
+                ):
+                    if verbose:
+                        print(
+                            f"Skipping attachment due to type filter: message {index}, "
+                            f"name {attachment_name} ({content_type})"
+                        )
+                    continue
+
                 size_mb = len(data) / (1024 * 1024)
                 if max_size_mb is not None and size_mb > max_size_mb:
                     if verbose:
@@ -294,22 +418,40 @@ def process_mbox(
                     print(f"{action} attachment to {output_path}")
     finally:
         mbox.close()
+        if show_progress and total_messages:
+            print(" " * 80, end="\r", flush=True)
+            print()
+
+    if list_types:
+        print("Attachment MIME type counts:")
+        for mime, count in mime_counter.most_common():
+            print(f"  {mime}: {count}")
+        print("\nAttachment extension counts:")
+        for ext, count in extension_counter.most_common():
+            print(f"  .{ext}: {count}")
+        print()
     return total_extracted
 
 
 def main() -> int:
     args = parse_args()
     output_dir = args.output_dir
+    include_types = _split_type_values(args.include_types)
+    exclude_types = _split_type_values(args.exclude_types)
 
     try:
         count = process_mbox(
             mbox_path=args.mbox,
             output_dir=output_dir,
             max_size_mb=args.max_size_mb,
+            include_types=include_types,
+            exclude_types=exclude_types,
             year_subdirs=args.year_subdirs,
             sender_subdirs=args.sender_subdirs,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            list_types=args.list_types,
+            show_progress=args.progress,
         )
     except Exception as exc:  # pragma: no cover - CLI entry point error handling
         print(f"Error: {exc}", file=os.sys.stderr)
