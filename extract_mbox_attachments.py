@@ -11,7 +11,7 @@ import email
 from email import policy
 from email.header import decode_header, make_header
 from email.message import Message
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 import mailbox
 import os
 from pathlib import Path
@@ -68,6 +68,14 @@ def parse_args() -> argparse.Namespace:
         "--list-types",
         action="store_true",
         help="Scan the archive and print a summary of attachment MIME types and extensions.",
+    )
+    parser.add_argument(
+        "--list-correspondents",
+        action="store_true",
+        help=(
+            "Scan the archive and print unique correspondents with their names, "
+            "email addresses, and message/attachment counts."
+        ),
     )
     parser.add_argument(
         "--name-template",
@@ -157,6 +165,19 @@ def decode_header_value(raw_value: Optional[str]) -> str:
     except Exception:
         decoded = raw_value
     return decoded
+
+
+def parse_addresses(raw_header: Optional[str]) -> list[tuple[str, str]]:
+    """Return (name, email) tuples parsed from a header value."""
+
+    if not raw_header:
+        return []
+    decoded = decode_header_value(raw_header)
+    return [
+        (name.strip(), address.strip())
+        for name, address in getaddresses([decoded])
+        if address.strip()
+    ]
 
 
 def parse_email_date(date_header: Optional[str]):
@@ -347,6 +368,30 @@ def display_progress(current: int, total: Optional[int]) -> None:
         print(f"Processed {current} message(s)...", end="\r", flush=True)
 
 
+def print_correspondents_summary(correspondents: dict[str, dict[str, int | str]]) -> None:
+    """Print correspondents sorted by attachment count, then messages."""
+
+    if not correspondents:
+        print("No correspondents found.")
+        return
+
+    print("Correspondents (by attachments, then messages):")
+    sorted_entries = sorted(
+        correspondents.values(),
+        key=lambda entry: (entry["attachment_count"], entry["message_count"], entry["address"]),
+        reverse=True,
+    )
+    for entry in sorted_entries:
+        name = entry["name"] or "(no name)"
+        address = entry["address"]
+        attachment_count = entry["attachment_count"]
+        message_count = entry["message_count"]
+        print(
+            f"  {name} <{address}>: attachments={attachment_count}, messages={message_count}"
+        )
+    print()
+
+
 def process_mbox(
     mbox_path: Path,
     output_dir: Path,
@@ -359,6 +404,7 @@ def process_mbox(
     dry_run: bool,
     verbose: bool,
     list_types: bool,
+    list_correspondents: bool,
     show_progress: bool,
 ) -> int:
     """Process the mbox file and return the count of extracted attachments."""
@@ -370,6 +416,7 @@ def process_mbox(
     total_extracted = 0
     mime_counter: Counter[str] = Counter()
     extension_counter: Counter[str] = Counter()
+    correspondents: dict[str, dict[str, int | str]] = {}
 
     mbox = mailbox.mbox(
         mbox_path,
@@ -384,7 +431,27 @@ def process_mbox(
             if show_progress:
                 display_progress(index, total_messages)
             body_text = extract_body_text(message)
-            sender = decode_header_value(message.get("From")) or "unknown"
+            sender_header = decode_header_value(message.get("From"))
+            addresses = parse_addresses(sender_header)
+            sender_display = sender_header or "unknown"
+            sender_value = sender_display
+            if addresses:
+                primary_name, primary_address = addresses[0]
+                sender_value = primary_name or primary_address or sender_display or "unknown"
+            for name, address in addresses or [("", "")]:
+                key = address.lower() or "unknown"
+                entry = correspondents.setdefault(
+                    key,
+                    {
+                        "name": name or "",
+                        "address": address or "unknown",
+                        "message_count": 0,
+                        "attachment_count": 0,
+                    },
+                )
+                if not entry["name"] and name:
+                    entry["name"] = name
+                entry["message_count"] += 1
             subject = decode_header_value(message.get("Subject")) or ""
             email_date = parse_email_date(message.get("Date"))
             date_str = email_date.strftime("%Y%m%d") if email_date else "undated"
@@ -396,6 +463,21 @@ def process_mbox(
                 suffix = Path(attachment_name).suffix.lower().lstrip(".")
                 if suffix:
                     extension_counter[suffix] += 1
+
+                for name, address in addresses or [("", "")]:
+                    key = address.lower() or "unknown"
+                    entry = correspondents.setdefault(
+                        key,
+                        {
+                            "name": name or "",
+                            "address": address or "unknown",
+                            "message_count": 0,
+                            "attachment_count": 0,
+                        },
+                    )
+                    if not entry["name"] and name:
+                        entry["name"] = name
+                    entry["attachment_count"] += 1
 
                 if not should_save_attachment(
                     content_type=content_type,
@@ -421,7 +503,7 @@ def process_mbox(
 
                 output_path = build_output_path(
                     output_dir=output_dir,
-                    sender=sender,
+                    sender=sender_value,
                     date_str=date_str,
                     subject=subject,
                     attachment_name=attachment_name,
@@ -459,6 +541,8 @@ def process_mbox(
         for ext, count in extension_counter.most_common():
             print(f"  .{ext}: {count}")
         print()
+    if list_correspondents:
+        print_correspondents_summary(correspondents)
     return total_extracted
 
 
@@ -481,6 +565,7 @@ def main() -> int:
             dry_run=args.dry_run,
             verbose=args.verbose,
             list_types=args.list_types,
+            list_correspondents=args.list_correspondents,
             show_progress=args.progress,
         )
     except Exception as exc:  # pragma: no cover - CLI entry point error handling
