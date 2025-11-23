@@ -313,11 +313,13 @@ def build_output_path(
     target_dir = Path(*parts)
 
     candidate = target_dir / base_name
+    suffix_chain = "".join(candidate.suffixes)
+    base_stem = candidate.name[: -len(suffix_chain)] if suffix_chain else candidate.name
     counter = 1
     final_path = candidate
     while final_path in existing:
         counter += 1
-        final_path = candidate.with_name(f"{candidate.name}_{counter}")
+        final_path = candidate.with_name(f"{base_stem}_{counter}{suffix_chain}")
     existing.add(final_path)
     return final_path
 
