@@ -102,6 +102,19 @@ def parse_args() -> argparse.Namespace:
         help="Place attachments into subdirectories based on the sender address.",
     )
     parser.add_argument(
+        "--domain-subdirs",
+        action="store_true",
+        help="Place attachments into subdirectories based on the sender domain.",
+    )
+    parser.add_argument(
+        "--export-metadata",
+        action="store_true",
+        help=(
+            "Write sidecar metadata files next to attachments. By default, "
+            "metadata files are not created."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Scan the mbox without writing any files.",
@@ -255,17 +268,20 @@ def should_save_attachment(
 def build_output_path(
     output_dir: Path,
     sender: str,
+    sender_domain: str,
     date_str: str,
     subject: str,
     attachment_name: str,
     name_template: str,
     year_subdirs: bool,
     sender_subdirs: bool,
+    domain_subdirs: bool,
     existing: set[Path],
 ) -> Path:
     """Construct a unique output path for an attachment."""
 
     safe_sender = sanitize_text(sender, fallback="unknown")
+    safe_domain = sanitize_text(sender_domain, fallback="unknown")
     safe_subject = sanitize_text(subject, fallback="no_subject")
     safe_attachment = sanitize_text(attachment_name, fallback="attachment")
     tokens = {
@@ -290,6 +306,8 @@ def build_output_path(
     parts = [output_dir]
     if year_subdirs and date_str[:4].isdigit():
         parts.append(Path(date_str[:4]))
+    if domain_subdirs:
+        parts.append(Path(safe_domain))
     if sender_subdirs:
         parts.append(Path(safe_sender))
     target_dir = Path(*parts)
@@ -307,7 +325,7 @@ def build_output_path(
 def write_attachment(
     path: Path,
     data: bytes,
-    metadata: str,
+    metadata: Optional[str],
     dry_run: bool,
 ) -> None:
     """Write the attachment and its sidecar metadata file."""
@@ -316,8 +334,9 @@ def write_attachment(
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
-    metadata_path = path.with_suffix(path.suffix + ".metadata.txt")
-    metadata_path.write_text(metadata, encoding="utf-8")
+    if metadata is not None:
+        metadata_path = path.with_suffix(path.suffix + ".metadata.txt")
+        metadata_path.write_text(metadata, encoding="utf-8")
 
 
 def format_metadata(
@@ -400,6 +419,8 @@ def process_mbox(
     exclude_types: set[str],
     year_subdirs: bool,
     sender_subdirs: bool,
+    domain_subdirs: bool,
+    export_metadata: bool,
     name_template: str,
     dry_run: bool,
     verbose: bool,
@@ -430,14 +451,17 @@ def process_mbox(
         for index, message in enumerate(mbox, start=1):
             if show_progress:
                 display_progress(index, total_messages)
-            body_text = extract_body_text(message)
+            body_text = extract_body_text(message) if export_metadata else ""
             sender_header = decode_header_value(message.get("From"))
             addresses = parse_addresses(sender_header)
             sender_display = sender_header or "unknown"
             sender_value = sender_display
+            sender_domain = "unknown"
             if addresses:
                 primary_name, primary_address = addresses[0]
                 sender_value = primary_name or primary_address or sender_display or "unknown"
+                if "@" in primary_address:
+                    sender_domain = primary_address.split("@", 1)[1]
             for name, address in addresses or [("", "")]:
                 key = address.lower() or "unknown"
                 entry = correspondents.setdefault(
@@ -504,21 +528,27 @@ def process_mbox(
                 output_path = build_output_path(
                     output_dir=output_dir,
                     sender=sender_value,
+                    sender_domain=sender_domain,
                     date_str=date_str,
                     subject=subject,
                     attachment_name=attachment_name,
                     name_template=name_template,
                     year_subdirs=year_subdirs,
                     sender_subdirs=sender_subdirs,
+                    domain_subdirs=domain_subdirs,
                     existing=existing_paths,
                 )
 
-                metadata_text = format_metadata(
-                    message=message,
-                    part=part,
-                    attachment_name=attachment_name,
-                    attachment_size=len(data),
-                    body_text=body_text,
+                metadata_text = (
+                    format_metadata(
+                        message=message,
+                        part=part,
+                        attachment_name=attachment_name,
+                        attachment_size=len(data),
+                        body_text=body_text,
+                    )
+                    if export_metadata
+                    else None
                 )
 
                 write_attachment(output_path, data, metadata_text, dry_run=dry_run)
@@ -561,6 +591,8 @@ def main() -> int:
             exclude_types=exclude_types,
             year_subdirs=args.year_subdirs,
             sender_subdirs=args.sender_subdirs,
+            domain_subdirs=args.domain_subdirs,
+            export_metadata=args.export_metadata,
             name_template=args.name_template,
             dry_run=args.dry_run,
             verbose=args.verbose,

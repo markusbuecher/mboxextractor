@@ -1,9 +1,9 @@
 # mboxextractor
 
 A small utility for extracting attachments from `.mbox` archives and preparing them
-for import into Paperless-ngx. The script writes attachment files alongside
-metadata sidecar files so Paperless-ngx can classify and search documents using
-filenames and text content.
+for import into Paperless-ngx. The script writes attachment files and can
+optionally emit metadata sidecar files so Paperless-ngx can classify and search
+documents using filenames and text content.
 
 ## Requirements
 
@@ -24,7 +24,9 @@ python extract_mbox_attachments.py \
   [--progress] \
   [--max-size-mb 25] \
   [--year-subdirs] \
+  [--domain-subdirs] \
   [--sender-subdirs] \
+  [--export-metadata] \
   [--dry-run] \
   [--verbose]
 ```
@@ -51,7 +53,11 @@ python extract_mbox_attachments.py \
 * `--max-size-mb`: Skip any attachment larger than the specified size (MB).
 * `--year-subdirs`: Organize output into `YYYY/` subdirectories based on the
   email date.
+* `--domain-subdirs`: Organize output into subdirectories named after the
+  sender's email domain.
 * `--sender-subdirs`: Organize output into sender-based subdirectories.
+* `--export-metadata`: Write `.metadata.txt` sidecar files containing email
+  headers, attachment details, and body text (metadata is skipped by default).
 * `--dry-run`: Parse the archive and report actions without writing files.
 * `--verbose`: Print progress details.
 
@@ -63,8 +69,8 @@ python extract_mbox_attachments.py \
 * Use `--list-correspondents` to discover which senders appear in the archive
   and how many messages/attachments they contribute before deciding on filters
   or templates.
-* Each attachment has a `.metadata.txt` sidecar file containing email headers,
-  attachment details, and any available plain-text body to enhance Paperless-ngx
-  indexing.
+* Enable `--export-metadata` to create `.metadata.txt` sidecar files containing
+  email headers, attachment details, and any available plain-text body to
+  enhance Paperless-ngx indexing.
 * The script is cross-platform and uses only the Python standard library, so it
   runs on macOS, Linux, and Windows.
